@@ -3,6 +3,10 @@ import json
 import time
 import os
 import subprocess
+from dotenv import load_dotenv  # 新增：导入 dotenv
+
+# 加载当前目录下的 .env 文件
+load_dotenv()
 
 # ================= 配置区域 =================
 
@@ -14,12 +18,13 @@ TEST_FILE_PATH = r"D:\Personal_Project\kgplatform_backend\python-service\txt_tes
 
 # API 配置
 CONFIG = {
-    "provider": "deepseek",
-    "api_key": "sk-1bc317ee3858458d9648944a2184e4df",  # 您的 API Key
-    "model": "deepseek-chat",
+    "provider": "forward",  # 修改：使用 forward 提供商模式
+    "api_key": os.getenv("FORWARD_API_KEY"),           # 从 .env 读取
+    "base_url": os.getenv("FORWARD_BASE_URL"),         # 从 .env 读取
+    "model": os.getenv("FORWARD_DEFAULT_MODEL"),       # 从 .env 读取
 
     # OpenIE 必需参数 (建议每次测试换一个新的 ID 以便观察全新数据)
-    "project_id": 154,
+    "project_id": 160,
     "material_id": 2001,
 }
 
@@ -122,6 +127,7 @@ def test_open_ie_task():
         "provider": CONFIG["provider"],
         "api_key": CONFIG["api_key"],
         "model": CONFIG.get("model"),
+        "base_url": CONFIG.get("base_url"),  # 新增：传递 base_url
 
         "files": [
             {
@@ -134,6 +140,9 @@ def test_open_ie_task():
     print(f"\n[1] 正在提交 OpenIE 任务...")
     print(f"    目标文件: {TEST_FILE_PATH}")
     print(f"    项目ID: {CONFIG['project_id']}")
+    print(f"    Provider: {CONFIG['provider']}")
+    print(f"    Base URL: {CONFIG.get('base_url')}")
+    print(f"    Model: {CONFIG.get('model')}")
 
     try:
         # 3. 发送创建任务请求

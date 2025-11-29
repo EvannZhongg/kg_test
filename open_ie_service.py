@@ -158,7 +158,9 @@ class OpenIEExtractionService:
 
     async def _process_single_file(self, file_path: str, file_id: int, project_id: int, task_id: str,
                                    base_url: str, api_key: str, model: str) -> Dict[str, Any]:
-        """分块 -> 向量化 -> LLM抽取 -> 【语义融合】 -> 重新向量化 -> 数据库"""
+        """
+        分块 -> 向量化 -> 【并发抽取】 -> 【即时串行入库】
+        """
         path_obj = Path(file_path)
         text = read_txt_text(path_obj)
         file_hash = db_client.generate_file_hash(text)
@@ -167,7 +169,7 @@ class OpenIEExtractionService:
         logger.info(f"已将文本切分为 {len(chunks)} 个 Chunk，准备开始处理...")
         print(f"\n>>> [文件开始] {path_obj.name} (共 {len(chunks)} 个 Chunk)")
 
-        # 1. Chunk 向量化
+        # 1. Chunk 批量向量化 (保持批量处理以提高效率)
         loop = asyncio.get_running_loop()
         t_chunk_embed = time.time()
         try:
@@ -183,180 +185,195 @@ class OpenIEExtractionService:
             completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"], input_text=""
         ).split("---Real Data")[0].strip()
 
-        extracted_count = 0
+        # === 并发控制配置 ===
+        CONCURRENCY_LIMIT = 5  # 限制同时进行 LLM 抽取的数量，防止 429
+        extract_sem = asyncio.Semaphore(CONCURRENCY_LIMIT)
+        ingest_lock = asyncio.Lock()  # 数据库写入锁，确保融合逻辑的原子性
+
+        extracted_count_container = {'count': 0}
         MERGE_THRESHOLD = 5
 
-        for idx, chunk in enumerate(chunks):
-            print(f"--- [Chunk {idx + 1}/{len(chunks)}] 处理中 ---")
-
+        # === 定义单个 Chunk 的处理管线 ===
+        async def process_one_chunk_pipeline(idx, chunk, embedding):
             chunk_unique_id = db_client.generate_chunk_id(file_hash, idx, project_id)
-            await db_client.upsert_chunk(project_id, file_id, chunk_unique_id, idx, chunk, chunk_embeddings[idx])
 
-            # 3. 抽取
-            t_llm_extract = time.time()
-            llm_output = await loop.run_in_executor(
-                None, call_llm, base_url, api_key, model, instruction, chunk
-            )
-            print(f"  [Time] LLM 抽取调用: {time.time() - t_llm_extract:.2f}s")
+            # --- Phase 1: 并发抽取 (Extraction) ---
+            # 这一步是耗时大户，允许并行执行
+            async with extract_sem:
+                print(f"--- [Chunk {idx + 1}/{len(chunks)}] 开始抽取")
 
-            nodes, edges = parse_lightrag_output(llm_output)
+                # 先保存 Chunk 原文 (IO操作)
+                await db_client.upsert_chunk(project_id, file_id, chunk_unique_id, idx, chunk, embedding)
+
+                # 调用 LLM 进行抽取 (IO操作，最慢的部分)
+                t_extract = time.time()
+                llm_output = await loop.run_in_executor(
+                    None, call_llm, base_url, api_key, model, instruction, chunk
+                )
+
+                nodes, edges = parse_lightrag_output(llm_output)
+                duration = time.time() - t_extract
+                # print(f"  ✓ [Chunk {idx + 1}] 抽取完成 ({duration:.2f}s)")
+
             if not nodes and not edges:
-                print("  [Info] 该 Chunk 未抽取到有效信息，跳过")
-                continue
+                print(f"  [Chunk {idx + 1}] 未抽取到信息，跳过入库。")
+                return
 
-            # === 4. 语义融合处理 (Semantic Merging) ===
+            # --- Phase 2: 即时串行入库 (Ingestion) ---
+            # 获取锁，确保 "查询旧值 -> 融合 -> 写入新值" 这一过程是独占的，防止覆盖
+            async with ingest_lock:
+                print(f"  >>> [Chunk {idx + 1}] 正在入库 (持有锁)...")
 
-            # 4.1 内部去重 (Chunk 内)
-            unique_nodes_map = {}
-            for n in nodes:
-                if n['label'] not in unique_nodes_map or len(n['description']) > len(
-                        unique_nodes_map[n['label']]['description']):
-                    unique_nodes_map[n['label']] = n
+                # 4.1 内部去重 (Chunk 内)
+                unique_nodes_map = {}
+                for n in nodes:
+                    if n['label'] not in unique_nodes_map or len(n['description']) > len(
+                            unique_nodes_map[n['label']]['description']):
+                        unique_nodes_map[n['label']] = n
 
-            # 补全关系实体
-            for e in edges:
-                for role in ['source', 'target']:
-                    if e[role] not in unique_nodes_map:
-                        unique_nodes_map[e[role]] = {'label': e[role], 'type': 'Unknown',
-                                                     'description': f"Entity in {e['relation']}"}
+                # 补全关系实体
+                for e in edges:
+                    for role in ['source', 'target']:
+                        if e[role] not in unique_nodes_map:
+                            unique_nodes_map[e[role]] = {'label': e[role], 'type': 'Unknown',
+                                                         'description': f"Entity in {e['relation']}"}
 
-            final_nodes = list(unique_nodes_map.values())
+                final_nodes = list(unique_nodes_map.values())
 
-            # 4.2 数据库查重 (Check against DB)
-            node_labels = [n['label'] for n in final_nodes]
-            existing_nodes_map = await db_client.get_nodes_map(project_id, node_labels)
+                # 4.2 数据库查重
+                node_labels = [n['label'] for n in final_nodes]
+                existing_nodes_map = await db_client.get_nodes_map(project_id, node_labels)
 
-            # 4.3 实体描述融合
-            merge_tasks = []
-            for node in final_nodes:
-                label = node['label']
-                existing_info = existing_nodes_map.get(label)
+                # 4.3 实体描述融合
+                merge_tasks = []
+                for node in final_nodes:
+                    label = node['label']
+                    existing_info = existing_nodes_map.get(label)
 
-                if existing_info:
-                    if isinstance(existing_info, dict):
-                        old_desc = existing_info.get('description', '')
-                        current_weight = existing_info.get('weight', 0)
-                    else:
-                        old_desc = str(existing_info)
-                        current_weight = 0
+                    if existing_info:
+                        if isinstance(existing_info, dict):
+                            old_desc = existing_info.get('description', '')
+                            current_weight = existing_info.get('weight', 0)
+                        else:
+                            old_desc = str(existing_info)
+                            current_weight = 0
 
-                    if (current_weight + 1) % MERGE_THRESHOLD == 0:
-                        merge_tasks.append(
-                            self._summarize_description(label, old_desc, node['description'], base_url, api_key, model)
-                        )
+                        # 达到阈值调用 LLM 摘要，否则直接拼接
+                        if (current_weight + 1) % MERGE_THRESHOLD == 0:
+                            merge_tasks.append(
+                                self._summarize_description(label, old_desc, node['description'], base_url, api_key,
+                                                            model)
+                            )
+                        else:
+                            f = asyncio.Future()
+                            concatenated = f"{old_desc}\n{node['description']}"
+                            f.set_result(concatenated)
+                            merge_tasks.append(f)
                     else:
                         f = asyncio.Future()
-                        concatenated = f"{old_desc}\n{node['description']}"
-                        f.set_result(concatenated)
+                        f.set_result(node['description'])
                         merge_tasks.append(f)
-                else:
-                    f = asyncio.Future()
-                    f.set_result(node['description'])
-                    merge_tasks.append(f)
 
-            t_merge_nodes = time.time()
-            merged_descriptions = await asyncio.gather(*merge_tasks)
-            print(f"  [Time] 实体描述融合 ({len(merge_tasks)} 个任务): {time.time() - t_merge_nodes:.2f}s")
+                merged_descriptions = await asyncio.gather(*merge_tasks)
+                for i, node in enumerate(final_nodes):
+                    node['description'] = merged_descriptions[i]
 
-            for i, node in enumerate(final_nodes):
-                node['description'] = merged_descriptions[i]
+                # 5. 关系融合
+                edge_ids = [db_client.generate_edge_id(project_id, e['source'], e['target'], e['relation']) for e in
+                            edges]
+                existing_edges_map = await db_client.get_edges_map(project_id, edge_ids)
 
-            # === 5. 关系融合处理 ===
-            edge_ids = [db_client.generate_edge_id(project_id, e['source'], e['target'], e['relation']) for e in edges]
-            existing_edges_map = await db_client.get_edges_map(project_id, edge_ids)
+                edge_merge_tasks = []
+                for i, edge in enumerate(edges):
+                    eid = edge_ids[i]
+                    existing_info = existing_edges_map.get(eid)
+                    edge_name = f"{edge['source']} {edge['relation']} {edge['target']}"
 
-            edge_merge_tasks = []
-            for i, edge in enumerate(edges):
-                eid = edge_ids[i]
-                existing_info = existing_edges_map.get(eid)
-                edge_name = f"{edge['source']} {edge['relation']} {edge['target']}"
+                    if existing_info:
+                        if isinstance(existing_info, dict):
+                            old_desc = existing_info.get('description', '')
+                            current_count = existing_info.get('count', 0)
+                        else:
+                            old_desc = str(existing_info)
+                            current_count = 0
 
-                if existing_info:
-                    if isinstance(existing_info, dict):
-                        old_desc = existing_info.get('description', '')
-                        current_count = existing_info.get('count', 0)
-                    else:
-                        old_desc = str(existing_info)
-                        current_count = 0
-
-                    if (current_count + 1) % MERGE_THRESHOLD == 0:
-                        edge_merge_tasks.append(
-                            self._summarize_description(edge_name, old_desc, edge['description'], base_url, api_key,
-                                                        model)
-                        )
+                        if (current_count + 1) % MERGE_THRESHOLD == 0:
+                            edge_merge_tasks.append(
+                                self._summarize_description(edge_name, old_desc, edge['description'], base_url, api_key,
+                                                            model)
+                            )
+                        else:
+                            f = asyncio.Future()
+                            concatenated = f"{old_desc}\n{edge['description']}"
+                            f.set_result(concatenated)
+                            edge_merge_tasks.append(f)
                     else:
                         f = asyncio.Future()
-                        concatenated = f"{old_desc}\n{edge['description']}"
-                        f.set_result(concatenated)
+                        f.set_result(edge['description'])
                         edge_merge_tasks.append(f)
-                else:
-                    f = asyncio.Future()
-                    f.set_result(edge['description'])
-                    edge_merge_tasks.append(f)
 
-            t_merge_edges = time.time()
-            merged_edge_descriptions = await asyncio.gather(*edge_merge_tasks)
-            print(f"  [Time] 关系描述融合 ({len(edge_merge_tasks)} 个任务): {time.time() - t_merge_edges:.2f}s")
+                merged_edge_descriptions = await asyncio.gather(*edge_merge_tasks)
+                for i, edge in enumerate(edges):
+                    edge['description'] = merged_edge_descriptions[i]
 
-            for i, edge in enumerate(edges):
-                edge['description'] = merged_edge_descriptions[i]
+                # 6. 重新向量化 (Re-Embedding)
+                # 由于描述已更新，需要重新计算向量。此操作仍在锁内，确保写入的数据与描述一致。
+                node_texts = [f"{n['label']} {n['description']}" for n in final_nodes]
+                edge_texts = [f"{e['source']} {e['relation']} {e['target']}: {e['description']}" for e in edges]
+                all_texts = node_texts + edge_texts
 
-            # === 6. 重新向量化 (Re-Embedding) ===
-            node_texts = [f"{n['label']} {n['description']}" for n in final_nodes]
-            edge_texts = [f"{e['source']} {e['relation']} {e['target']}: {e['description']}" for e in edges]
-
-            all_texts = node_texts + edge_texts
-            t_re_embed = time.time()
-            try:
-                all_vecs = await loop.run_in_executor(
-                    None, lambda: embedding_service.get_embeddings(all_texts)
-                )
-            except:
-                all_vecs = [None] * len(all_texts)
-            print(f"  [Time] 实体/关系重向量化 ({len(all_texts)} 项): {time.time() - t_re_embed:.2f}s")
-
-            node_vecs = dict(zip([n['label'] for n in final_nodes], all_vecs[:len(final_nodes)]))
-            edge_vecs = all_vecs[len(final_nodes):]
-
-            # === 7. 入库 (Upsert with merged desc & new vector) ===
-            t_db_nodes = time.time()
-            node_id_map = {}
-            for node in final_nodes:
-                label = node['label']
-                internal_id = await db_client.upsert_node(
-                    project_id, label, node['type'], node['description'],
-                    chunk_unique_id, embedding=node_vecs.get(label)
-                )
-                node_id_map[label] = internal_id
-                await db_client.insert_provenance(project_id, task_id, chunk_unique_id, node_internal_id=internal_id)
-                extracted_count += 1
-            print(f"  [Time] 实体入库 ({len(final_nodes)} 个): {time.time() - t_db_nodes:.2f}s")
-
-            t_db_edges = time.time()
-            nodes_to_inc_degree = []
-            for i, edge in enumerate(edges):
-                src_id = node_id_map.get(edge['source'])
-                tgt_id = node_id_map.get(edge['target'])
-
-                if src_id and tgt_id:
-                    edge_internal_id, is_new = await db_client.upsert_edge(
-                        project_id, src_id, tgt_id,
-                        edge['source'], edge['target'],
-                        edge['relation'], edge['description'], 1.0,
-                        chunk_unique_id, embedding=edge_vecs[i]
+                try:
+                    all_vecs = await loop.run_in_executor(
+                        None, lambda: embedding_service.get_embeddings(all_texts)
                     )
-                    if is_new: nodes_to_inc_degree.extend([src_id, tgt_id])
+                except:
+                    all_vecs = [None] * len(all_texts)
+
+                node_vecs = dict(zip([n['label'] for n in final_nodes], all_vecs[:len(final_nodes)]))
+                edge_vecs = all_vecs[len(final_nodes):]
+
+                # 7. 写入数据库 (Upsert)
+                node_id_map = {}
+                for node in final_nodes:
+                    label = node['label']
+                    internal_id = await db_client.upsert_node(
+                        project_id, label, node['type'], node['description'],
+                        chunk_unique_id, embedding=node_vecs.get(label)
+                    )
+                    node_id_map[label] = internal_id
                     await db_client.insert_provenance(project_id, task_id, chunk_unique_id,
-                                                      edge_internal_id=edge_internal_id)
-                    extracted_count += 1
+                                                      node_internal_id=internal_id)
+                    extracted_count_container['count'] += 1
 
-            if nodes_to_inc_degree:
-                await db_client.increment_nodes_degree(nodes_to_inc_degree)
-            print(f"  [Time] 关系入库 ({len(edges)} 条): {time.time() - t_db_edges:.2f}s")
+                nodes_to_inc_degree = []
+                for i, edge in enumerate(edges):
+                    src_id = node_id_map.get(edge['source'])
+                    tgt_id = node_id_map.get(edge['target'])
 
-        return {'count': extracted_count}
+                    if src_id and tgt_id:
+                        edge_internal_id, is_new = await db_client.upsert_edge(
+                            project_id, src_id, tgt_id,
+                            edge['source'], edge['target'],
+                            edge['relation'], edge['description'], 1.0,
+                            chunk_unique_id, embedding=edge_vecs[i]
+                        )
+                        if is_new: nodes_to_inc_degree.extend([src_id, tgt_id])
+                        await db_client.insert_provenance(project_id, task_id, chunk_unique_id,
+                                                          edge_internal_id=edge_internal_id)
+                        extracted_count_container['count'] += 1
 
-    # ... (辅助方法保持不变) ...
+                if nodes_to_inc_degree:
+                    await db_client.increment_nodes_degree(nodes_to_inc_degree)
+
+                print(f"  ✓ [Chunk {idx + 1}] 入库完毕 (释放锁)")
+
+        # 创建所有任务并并发执行
+        tasks = [process_one_chunk_pipeline(i, chunk, chunk_embeddings[i]) for i, chunk in enumerate(chunks)]
+        await asyncio.gather(*tasks)
+
+        return {'count': extracted_count_container['count']}
+
+
     def _update_task_progress(self, task_id, processed, failed, total_triples, results, errors):
         with self.task_lock:
             if task_id in self.tasks:
