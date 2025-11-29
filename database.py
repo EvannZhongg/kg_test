@@ -94,18 +94,22 @@ class DatabaseClient:
     # === 核心 Upsert 逻辑 (增量更新) ===
 
     async def upsert_chunk(self, project_id: int, file_id: int, chunk_id: str,
-                           chunk_index: int, text: str, embedding: List[float]):
+                           chunk_index: int, text: str, embedding: List[float],
+                           file_name: str = None):  # <--- [修改1] 新增 file_name 参数
         embedding_str = str(embedding) if embedding else None
+
         sql = """
-        INSERT INTO open_graph_chunks (id, project_id, file_id, chunk_index, text_content, embedding)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO open_graph_chunks (id, project_id, file_id, chunk_index, text_content, embedding, file_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (id) DO UPDATE SET
             text_content = EXCLUDED.text_content,
-            embedding = EXCLUDED.embedding;
+            embedding = EXCLUDED.embedding,
+            file_name = EXCLUDED.file_name;
         """
+
         pool = await self.get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(sql, chunk_id, project_id, file_id, chunk_index, text, embedding_str)
+            await conn.execute(sql, chunk_id, project_id, file_id, chunk_index, text, embedding_str, file_name)
 
     async def get_nodes_map(self, project_id: int, labels: List[str]) -> Dict[str, Dict[str, Any]]:
         """获取已存在实体的描述和权重，返回 {label: {'description': ..., 'weight': ...}}"""

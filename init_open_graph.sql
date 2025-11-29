@@ -17,7 +17,7 @@ CREATE TABLE open_graph_chunks (
     id VARCHAR(255) PRIMARY KEY,          -- 唯一ID (格式: "docHash_index")
     project_id BIGINT NOT NULL,
     file_id BIGINT NOT NULL,
-
+    file_name VARCHAR(512),
     chunk_index INT NOT NULL,
     text_content TEXT,                    -- 分块原文
     embedding vector(1024),               -- 分块向量 (维度可根据模型调整，如 1536, 768)

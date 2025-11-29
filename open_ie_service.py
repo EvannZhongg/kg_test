@@ -162,6 +162,7 @@ class OpenIEExtractionService:
         分块 -> 向量化 -> 【并发抽取】 -> 【即时串行入库】
         """
         path_obj = Path(file_path)
+        file_name = path_obj.name  # <--- [修改点1] 获取文件名
         text = read_txt_text(path_obj)
         file_hash = db_client.generate_file_hash(text)
         chunks = chunk_text(text)
@@ -203,7 +204,9 @@ class OpenIEExtractionService:
                 print(f"--- [Chunk {idx + 1}/{len(chunks)}] 开始抽取")
 
                 # 先保存 Chunk 原文 (IO操作)
-                await db_client.upsert_chunk(project_id, file_id, chunk_unique_id, idx, chunk, embedding)
+                # <--- [修改点2] 传递 file_name 参数
+                await db_client.upsert_chunk(project_id, file_id, chunk_unique_id, idx, chunk, embedding,
+                                             file_name=file_name)
 
                 # 调用 LLM 进行抽取 (IO操作，最慢的部分)
                 t_extract = time.time()

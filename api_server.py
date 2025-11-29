@@ -12,7 +12,7 @@ from datetime import datetime
 import requests
 import uuid
 from urllib.parse import urlparse
-
+import urllib.parse
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 from werkzeug.exceptions import BadRequest, NotFound, InternalServerError
@@ -98,7 +98,7 @@ class APIServer:
             # 检查文件扩展名
             parsed_url = urlparse(url)
             file_ext = Path(parsed_url.path).suffix.lower()
-            
+
             if allowed_extensions and file_ext not in allowed_extensions:
                 raise ValueError(f"URL指向的文件格式不支持: {url}，支持的格式: {allowed_extensions}")
 
@@ -113,30 +113,30 @@ class APIServer:
             original_filename = os.path.basename(parsed_url.path)
             if not original_filename:
                 original_filename = f"downloaded_{uuid.uuid4().hex[:8]}{file_ext}"
-            
+
             # URL解码文件名
             import urllib.parse
             decoded_filename = urllib.parse.unquote(original_filename)
             logger.debug(f"原始文件名: {original_filename}")
             logger.debug(f"解码后文件名: {decoded_filename}")
-            
+
             # 简化文件名处理：直接使用UUID生成安全文件名
             # 这样可以避免中文路径和特殊字符的问题
             safe_filename = f"sample_{uuid.uuid4().hex[:8]}{file_ext}"
-            
+
             logger.debug(f"最终安全文件名: {safe_filename}")
             file_path = download_dir / safe_filename
-            
+
             # 下载文件
             logger.info(f"开始从URL下载文件: {url}")
             response = requests.get(url, headers=headers, timeout=300, stream=True)  # 5分钟超时
             response.raise_for_status()
-            
+
             # 检查文件大小（限制为100MB）
             content_length = response.headers.get('content-length')
             if content_length and int(content_length) > 100 * 1024 * 1024:
                 raise ValueError("文件大小超过100MB限制")
-            
+
             # 写入文件
             with open(file_path, 'wb') as f:
                 downloaded_size = 0
@@ -149,10 +149,10 @@ class APIServer:
                             f.close()
                             file_path.unlink()  # 删除部分下载的文件
                             raise ValueError("文件大小超过100MB限制")
-            
+
             logger.info(f"文件下载完成: {file_path}")
             return str(file_path)
-            
+
         except requests.exceptions.RequestException as e:
             raise ValueError(f"下载文件失败: {str(e)}")
         except Exception as e:
