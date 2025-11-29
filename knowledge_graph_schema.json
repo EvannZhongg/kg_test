@@ -1,0 +1,257 @@
+{
+  "triples": [
+    {
+      "head":{
+        "type":"实践活动",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"实践类型",
+        "includes":[]
+      },
+      "tail":{
+        "type":"实践类型",
+        "includes":[
+          "乡村振兴",
+          "社区服务",
+          "志愿讲解",
+          "支部共建",
+          "支教",
+          "校企交流"
+        ]
+      }
+    },
+    {
+      "head": {
+        "type": "实践活动",
+        "includes": []
+      },
+      "relationship": {
+        "type":"达成",
+        "includes":[]
+      },
+      "tail": {
+        "type": "实践成果",
+        "includes": []
+      }
+    },
+    {
+      "head":{
+        "type":"实践活动",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"实践理念",
+        "includes":[]
+      },
+      "tail": {
+        "type": "实践理念",
+        "includes": [
+          "非遗体验",
+          "国际交流",
+          "铸牢中华民族共同体意识",
+          "知识扶贫"
+        ]
+      }
+    },
+    {
+      "head":{
+        "type":"实践活动",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"实践时间",
+        "includes":[]
+      },
+      "tail":{
+        "type":"实践时间",
+        "includes":[]
+      }
+    },
+    {
+      "head":{
+        "type":"实践活动",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"实践地点",
+        "includes":[]
+      },
+      "tail":{
+        "type":"实践地点",
+        "includes":[
+        ]
+      }
+    },
+    {
+      "head": {
+        "type": "实践活动",
+        "includes": []
+      },
+      "relationship": {
+        "type":"获得荣誉",
+        "includes":[]
+      },
+      "tail": {
+        "type": "荣誉",
+        "includes": [
+            "奖项",
+            "证书",
+            "荣誉称号"
+        ]
+      }
+    },
+    {
+      "head": {
+        "type": "团队",
+        "includes": []
+      },
+      "relationship": {
+        "type":"对接",
+        "includes":[]
+      },
+      "tail": {
+        "type": "平台",
+        "includes": [
+          "政府",
+          "企业",
+          "院校",
+          "场馆"
+        ]
+      }
+    },
+    {
+      "head": {
+        "type": "团队",
+        "includes": []
+      },
+      "relationship": {
+        "type":"属于",
+        "includes":[]
+      },
+      "tail": {
+        "type": "东大建院",
+        "includes": []
+      }
+    },
+    {
+      "head": {
+        "type": "团队",
+        "includes": []
+      },
+      "relationship": {
+        "type":"实践",
+        "includes":[]
+      },
+      "tail": {
+        "type": "实践活动",
+        "includes": [
+        ]
+      }
+    },
+    {
+      "head":{
+        "type":"团队",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"获得荣誉",
+        "includes":[]
+      },
+      "tail":{
+        "type":"荣誉",
+        "includes":[]
+      }
+    },
+    {
+      "head":{
+        "type":"平台",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"实践",
+        "includes":[]
+      },
+      "tail":{
+        "type":"实践活动",
+        "includes":[]
+      }
+    },
+    {
+      "head": {
+        "type": "人物",
+        "includes": []
+      },
+      "relationship": {
+        "type":"实践行为",
+        "includes":[
+        ]
+      },
+      "tail": {
+        "type": "实践行为",
+        "includes": [
+          "讲解",
+          "授课",
+          "记录",
+          "测绘",
+          "考察",
+          "制作",
+          "参观",
+          "采访"
+        ]
+      }
+    },
+    {
+      "head":{
+        "type":"人物",
+        "includes":[]
+      },
+      "relationship":{
+        "type":"参与",
+        "includes":[]
+      },
+      "tail":{
+        "type":"实践活动",
+        "includes":[]
+      }
+    },
+    {
+      "head": {
+        "type": "人物",
+        "includes": [
+        ]
+      },
+      "relationship": {
+        "type":"团队身份",
+        "includes":[
+          "队长",
+          "队员",
+          "指导老师"
+        ]
+      },
+      "tail": {
+        "type": "团队",
+        "includes": []
+      }
+    },
+    {
+      "head": {
+        "type": "实践成果",
+        "includes": []
+      },
+      "relationship": {
+        "type":"依托",
+        "includes":[]
+      },
+      "tail": {
+        "type": "专业技能",
+        "includes": [
+          "建筑历史",
+          "建筑科普",
+          "绘画手工",
+          "数字科技"
+        ]
+      }
+    }
+  ]
+} 
