@@ -249,8 +249,9 @@ class OpenIEExtractionService:
                 for e in edges:
                     for role in ['source', 'target']:
                         if e[role] not in unique_nodes_map:
+                            # 【修改 1】描述设为空字符串，而不是 "Entity in ..."
                             unique_nodes_map[e[role]] = {'label': e[role], 'type': 'Unknown',
-                                                         'description': f"Entity in {e['relation']}"}
+                                                         'description': ""}
 
                 final_nodes = list(unique_nodes_map.values())
 
@@ -258,34 +259,75 @@ class OpenIEExtractionService:
                 node_labels = [n['label'] for n in final_nodes]
                 existing_nodes_map = await db_client.get_nodes_map(project_id, node_labels)
 
-                # 4.3 实体描述融合
+                # 4.3 实体描述与类型融合
                 merge_tasks = []
+                UNKNOWN_TYPE = 'Unknown'
+
                 for node in final_nodes:
                     label = node['label']
+                    new_desc = node.get('description', '').strip()
+                    new_type = node.get('type', UNKNOWN_TYPE)
+
                     existing_info = existing_nodes_map.get(label)
 
                     if existing_info:
                         if isinstance(existing_info, dict):
                             old_desc = existing_info.get('description', '')
                             current_weight = existing_info.get('weight', 0)
+                            old_type = existing_info.get('type', UNKNOWN_TYPE)
                         else:
+                            # 兼容旧代码逻辑（虽然现在应该都是dict）
                             old_desc = str(existing_info)
                             current_weight = 0
+                            old_type = UNKNOWN_TYPE
 
-                        # 达到阈值调用 LLM 摘要，否则直接拼接
-                        if (current_weight + 1) % MERGE_THRESHOLD == 0:
-                            merge_tasks.append(
-                                self._summarize_description(label, old_desc, node['description'], base_url, api_key,
-                                                            model)
-                            )
-                        else:
+                        # === 核心逻辑修改开始 ===
+
+                        is_old_unknown = (old_type == UNKNOWN_TYPE)
+                        is_new_unknown = (new_type == UNKNOWN_TYPE)
+
+                        # 场景 1: 旧强新弱 (已存在正常类型，当前是补全的Unknown) -> 忽略新值
+                        if not is_old_unknown and is_new_unknown:
+                            # 强制将当前 node 的类型改回旧类型，防止数据库被覆盖为 Unknown
+                            node['type'] = old_type
+                            # 描述直接使用旧描述，不进行融合
                             f = asyncio.Future()
-                            concatenated = f"{old_desc}\n{node['description']}"
-                            f.set_result(concatenated)
+                            f.set_result(old_desc)
                             merge_tasks.append(f)
+
+                        # 场景 2: 旧弱新强 (已存在Unknown，当前是正常类型) -> 取代旧值
+                        elif is_old_unknown and not is_new_unknown:
+                            # node['type'] 已经是新类型，无需修改
+                            # 描述直接使用新描述，覆盖旧的（通常旧的是 "Entity in..." 或空）
+                            f = asyncio.Future()
+                            f.set_result(new_desc)
+                            merge_tasks.append(f)
+
+                        # 场景 3: 同级 (都是正常 或 都是Unknown) -> 执行原有融合逻辑
+                        else:
+                            if not new_desc:  # 如果新描述为空（如同级Unknown），保留旧描述
+                                f = asyncio.Future()
+                                f.set_result(old_desc)
+                                merge_tasks.append(f)
+                            elif (current_weight + 1) % MERGE_THRESHOLD == 0:
+                                merge_tasks.append(
+                                    self._summarize_description(label, old_desc, new_desc, base_url, api_key,
+                                                                model)
+                                )
+                            else:
+                                f = asyncio.Future()
+                                if old_desc:
+                                    concatenated = f"{old_desc}\n{new_desc}"
+                                else:
+                                    concatenated = new_desc
+                                f.set_result(concatenated)
+                                merge_tasks.append(f)
+                        # === 核心逻辑修改结束 ===
+
                     else:
+                        # 全新实体
                         f = asyncio.Future()
-                        f.set_result(node['description'])
+                        f.set_result(new_desc)
                         merge_tasks.append(f)
 
                 merged_descriptions = await asyncio.gather(*merge_tasks)
@@ -332,7 +374,7 @@ class OpenIEExtractionService:
 
                 # 6. 重新向量化 (Re-Embedding)
                 # 由于描述已更新，需要重新计算向量。此操作仍在锁内，确保写入的数据与描述一致。
-                node_texts = [f"{n['label']} {n['description']}" for n in final_nodes]
+                node_texts = [f"{n['label']} {n['description']}".strip() for n in final_nodes]
                 edge_texts = [f"{e['source']} {e['relation']} {e['target']}: {e['description']}" for e in edges]
                 all_texts = node_texts + edge_texts
 

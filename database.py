@@ -112,19 +112,28 @@ class DatabaseClient:
             await conn.execute(sql, chunk_id, project_id, file_id, chunk_index, text, embedding_str, file_name)
 
     async def get_nodes_map(self, project_id: int, labels: List[str]) -> Dict[str, Dict[str, Any]]:
-        """获取已存在实体的描述和权重，返回 {label: {'description': ..., 'weight': ...}}"""
+        """获取已存在实体的描述、权重和类型"""
         if not labels:
             return {}
 
+        # 【修改 1】增加 entity_type 字段的查询
         sql = """
-        SELECT label, description, weight
+        SELECT label, description, weight, entity_type
         FROM open_graph_nodes 
         WHERE project_id = $1 AND label = ANY($2)
         """
         pool = await self.get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, project_id, labels)
-            return {row['label']: {'description': row['description'], 'weight': row['weight']} for row in rows}
+            # 【修改 2】返回结果中包含 type
+            return {
+                row['label']: {
+                    'description': row['description'],
+                    'weight': row['weight'],
+                    'type': row['entity_type']  # 映射数据库字段 entity_type 到字典 key 'type'
+                }
+                for row in rows
+            }
 
     async def get_edges_map(self, project_id: int, edge_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """获取已存在关系的描述和出现次数，返回 {edge_id: {'description': ..., 'count': ...}}"""
@@ -148,12 +157,15 @@ class DatabaseClient:
         node_id = self.generate_node_id(project_id, label)
         embedding_str = str(embedding) if embedding else None
 
+        # 【修改 3】ON CONFLICT UPDATE 中增加 entity_type = EXCLUDED.entity_type
+        # 这样当类型从 Unknown 变为具体类型时，数据库会被更新
         sql = """
         INSERT INTO open_graph_nodes (project_id, label, node_id, entity_type, description, source_chunk_ids, weight, embedding)
         VALUES ($1, $2, $3, $4, $5, ARRAY[$6], 1, $7)
         ON CONFLICT (node_id) DO UPDATE SET
             weight = open_graph_nodes.weight + 1,
             source_chunk_ids = array_append(open_graph_nodes.source_chunk_ids, $6),
+            entity_type = EXCLUDED.entity_type, 
             description = EXCLUDED.description,
             embedding = EXCLUDED.embedding,
             updated_at = CURRENT_TIMESTAMP
