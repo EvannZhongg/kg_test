@@ -34,16 +34,16 @@
 
 ```json
 {
-    "task_type": "open_ie",
-    "project_id": 105,
-    "provider": "deepseek",
-    "api_key": "sk-xxxxxx",
-    "model": "deepseek-chat",
-    "base_url": "https://api.deepseek.com",
-    "files": [
+    "task_type": "open_ie",          // [必填] 指定任务类型
+    "project_id": 160,               // [必填] 项目隔离ID
+    "provider": "deepseek",          // [必填] 模型提供商 (如 deepseek, forward, qwen)
+    "api_key": "sk-...",             // [必填] API Key
+    "base_url": "...",               // [可选] 自定义 Base URL
+    "model": "...",                  // [可选] 指定模型名称
+    "files": [                       // [必填] 文件列表
         {
-            "material_id": 2001,
-            "url": "/abs/path/to/file.txt"
+            "material_id": 2001,     // [必填] 关联的素材ID
+            "url": "http://.../三国演义.txt"  // [必填] 文件绝对路径或 URL
         }
     ]
 }

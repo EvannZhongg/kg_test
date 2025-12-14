@@ -14,7 +14,7 @@ load_dotenv()
 API_BASE_URL = "http://localhost:8001"
 
 # 测试文件路径 (请修改为您本地实际存在的路径)
-TEST_FILE_PATH = r"D:\Personal_Project\kgplatform_backend\python-service\txt_test\三国演义.txt"
+TEST_FILE_PATH = r"D:\Personal_Project\kgplatform_backend\python-service\txt_test\水浒传.txt"
 
 # API 配置
 CONFIG = {
@@ -24,7 +24,7 @@ CONFIG = {
     "model": os.getenv("FORWARD_DEFAULT_MODEL"),       # 从 .env 读取
 
     # OpenIE 必需参数 (建议每次测试换一个新的 ID 以便观察全新数据)
-    "project_id": 160,
+    "project_id": 158,
     "material_id": 2001,
 }
 
@@ -34,16 +34,17 @@ CONFIG = {
 def verify_database_content(project_id):
     """
     通过 Docker 执行 SQL 验证数据库内容
-    重点查看：描述(Description)、权重(Weight)、度(Degree)、向量(Vector)
+    重点查看：描述(Description)、权重(Weight)、度(Degree)、向量(Vector)、来源文件(file_name)
     """
     print(f"\n{'=' * 20} 数据库存储验证 (Project ID: {project_id}) {'=' * 20}")
 
     # 定义查询
     queries = [
         {
-            "name": "1. 分块表 (open_graph_chunks) - 检查原文和向量",
+            "name": "1. 分块表 (open_graph_chunks) - 检查原文、向量和文件名",
             "sql": f"""
                 SELECT chunk_index, 
+                       file_name,            -- <--- [新增] 检查文件名是否正确存入
                        left(id, 20) as chunk_id_prefix, 
                        left(text_content, 30) as content_preview, 
                        (embedding IS NOT NULL) as has_vector 
@@ -127,7 +128,7 @@ def test_open_ie_task():
         "provider": CONFIG["provider"],
         "api_key": CONFIG["api_key"],
         "model": CONFIG.get("model"),
-        "base_url": CONFIG.get("base_url"),  # 新增：传递 base_url
+        "base_url": CONFIG.get("base_url"),
 
         "files": [
             {

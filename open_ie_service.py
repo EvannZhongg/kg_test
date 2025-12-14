@@ -59,12 +59,18 @@ class OpenIEExtractionService:
         for file_item in files:
             if isinstance(file_item, dict):
                 file_path, material_id = file_item.get('url'), file_item.get('material_id')
+                # 提取原始文件名
+                original_file_name = file_item.get('file_name') or Path(file_path).name
                 if not material_id: raise ValueError(f"OpenIE 模式下文件必须包含 material_id: {file_path}")
             else:
                 raise ValueError("OpenIE 模式不支持纯路径字符串")
             path = Path(file_path)
             if not path.exists(): raise FileNotFoundError(f"文件不存在: {file_path}")
-            valid_files.append({'path': str(path), 'material_id': material_id})
+            valid_files.append({
+                'path': str(path),
+                'material_id': material_id,
+                'file_name': original_file_name
+            })
 
         task_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -105,18 +111,21 @@ class OpenIEExtractionService:
             for i, file_info in enumerate(files, 1):
                 if task_id in self.cancelled_tasks: return
                 file_path, file_id = file_info['path'], file_info['material_id']
-                logger.info(f"[OpenIE] 处理 {Path(file_path).name}")
+                original_file_name = file_info.get('file_name') or Path(file_path).name
+
+                logger.info(f"[OpenIE] 处理 {original_file_name}")
                 try:
                     file_stats = await self._process_single_file(file_path, file_id, project_id, task_id,
-                                                                 resolved_base_url, resolved_api_key, resolved_model)
-                    results.append(TaskFile(file_name=Path(file_path).name, material_id=file_id, status='success',
+                                                                 resolved_base_url, resolved_api_key, resolved_model,
+                                                                 original_file_name=original_file_name)
+                    results.append(TaskFile(file_name=original_file_name, material_id=file_id, status='success',
                                             triples_count=file_stats['count'], output_files={}))
                     total_extracted_count += file_stats['count']
                     processed_count += 1
                 except Exception as e:
                     logger.error(f"Failed: {e}")
                     results.append(
-                        TaskFile(file_name=Path(file_path).name, material_id=file_id, status='failed', error=str(e)))
+                        TaskFile(file_name=original_file_name, material_id=file_id, status='failed', error=str(e)))
                     failed_count += 1
                 self._update_task_progress(task_id, processed_count, failed_count, total_extracted_count, results,
                                            errors)
@@ -157,18 +166,20 @@ class OpenIEExtractionService:
             return new_desc
 
     async def _process_single_file(self, file_path: str, file_id: int, project_id: int, task_id: str,
-                                   base_url: str, api_key: str, model: str) -> Dict[str, Any]:
+                                   base_url: str, api_key: str, model: str,
+                                   original_file_name: str = None) -> Dict[str, Any]:
         """
         分块 -> 向量化 -> 【并发抽取】 -> 【即时串行入库】
         """
         path_obj = Path(file_path)
-        file_name = path_obj.name  # <--- [修改点1] 获取文件名
+        file_name = original_file_name if original_file_name else path_obj.name
+
         text = read_txt_text(path_obj)
         file_hash = db_client.generate_file_hash(text)
         chunks = chunk_text(text)
 
         logger.info(f"已将文本切分为 {len(chunks)} 个 Chunk，准备开始处理...")
-        print(f"\n>>> [文件开始] {path_obj.name} (共 {len(chunks)} 个 Chunk)")
+        print(f"\n>>> [文件开始] {file_name} (共 {len(chunks)} 个 Chunk)")
 
         # 1. Chunk 批量向量化 (保持批量处理以提高效率)
         loop = asyncio.get_running_loop()
@@ -204,7 +215,7 @@ class OpenIEExtractionService:
                 print(f"--- [Chunk {idx + 1}/{len(chunks)}] 开始抽取")
 
                 # 先保存 Chunk 原文 (IO操作)
-                # <--- [修改点2] 传递 file_name 参数
+                # 传递 file_name 参数
                 await db_client.upsert_chunk(project_id, file_id, chunk_unique_id, idx, chunk, embedding,
                                              file_name=file_name)
 
@@ -375,7 +386,6 @@ class OpenIEExtractionService:
         await asyncio.gather(*tasks)
 
         return {'count': extracted_count_container['count']}
-
 
     def _update_task_progress(self, task_id, processed, failed, total_triples, results, errors):
         with self.task_lock:

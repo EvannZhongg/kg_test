@@ -24,11 +24,12 @@ You are an expert Open Information Extraction (OpenIE) Specialist. Your task is 
     * **Relationship Details:**
         * `source_entity`: Name of the source entity (must match an extracted entity name).
         * `target_entity`: Name of the target entity (must match an extracted entity name).
-        * `relationship_keywords`: Key verb or phrase describing the relation (e.g., "increases", "is located in", "collaborates with").
+        * `relationship_keywords`: Key verb or phrase describing the relation (e.g., "increases", "is located in", "collaborates with"). Keep it concise. Avoid using ellipses (...) or placeholders. Use continuous verb phrases where possible (e.g., use 'communicated with' instead of 'communicated ... with')."
         * `relationship_description`: A concise explanation of the connection based *solely* on the input text.
     * **Output Format:** `relation{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description`
 
 3.  **General Rules:**
+    * **Entity Consistency**: Every entity appearing as a `source_entity` or `target_entity` in the relationships MUST be explicitly extracted and described in the 'Entity Extraction' list. Do not output a relationship if either the source or target entity is missing from the entity list.
     * **Completeness:** Extract as much information as possible.
     * **Language:** Output in {language}. Proper nouns should be retained in their original language.
     * **Tone:** All output must be in the third person, avoiding pronouns like 'I', 'you', 'this article'.

@@ -528,7 +528,6 @@ class APIServer:
                 if is_filename_list:
                     invalid_files = []
                     for file_item in files:
-                        # 提取URL和material_id
                         if is_new_format:
                             filename = file_item.get('url')
                             material_id = file_item.get('material_id')
@@ -556,17 +555,17 @@ class APIServer:
                             continue
                         resolved_files.append({
                             'material_id': material_id,
-                            'url': str(file_path)
+                            'url': str(file_path),
+                            'file_name': filename  # <--- [新增] 显式传递文件名
                         })
 
                     if invalid_files:
-                        raise BadRequest(f"无效文件列表：{'; '.join(invalid_files)}")
+                            raise BadRequest(f"无效文件列表：{'; '.join(invalid_files)}")
 
-                # 处理绝对路径列表
+                        # 处理绝对路径列表
                 elif is_path_list:
                     invalid_files = []
                     for file_item in files:
-                        # 提取URL和material_id
                         if is_new_format:
                             file_path_str = file_item.get('url')
                             material_id = file_item.get('material_id')
@@ -586,7 +585,8 @@ class APIServer:
                             continue
                         resolved_files.append({
                             'material_id': material_id,
-                            'url': file_path_str
+                            'url': file_path_str,
+                            'file_name': path_obj.name  # <--- [新增] 提取路径中的文件名
                         })
 
                     if invalid_files:
@@ -596,7 +596,6 @@ class APIServer:
                 elif is_url_list:
                     invalid_files = []
                     for file_item in files:
-                        # 提取URL和material_id
                         if is_new_format:
                             url = file_item.get('url')
                             material_id = file_item.get('material_id')
@@ -606,9 +605,20 @@ class APIServer:
 
                         try:
                             downloaded_file = self._download_file_from_url(url, UPLOAD_DIR)
+
+                            try:
+                                parsed_url = urlparse(url)
+                                original_name = os.path.basename(parsed_url.path)
+                                decoded_name = urllib.parse.unquote(original_name)
+                                if not decoded_name:
+                                    decoded_name = Path(downloaded_file).name
+                            except:
+                                decoded_name = Path(downloaded_file).name
+
                             resolved_files.append({
                                 'material_id': material_id,
-                                'url': downloaded_file
+                                'url': downloaded_file,
+                                'file_name': decoded_name
                             })
                         except ValueError as e:
                             invalid_files.append(f"{url}（{str(e)}）")

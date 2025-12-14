@@ -4,12 +4,12 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# 加载环境变量
+# 1. 加载环境变量 (保持不变)
 current_dir = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=current_dir / '.env')
 
 
-async def clear_data():
+async def reset_database():
     # 获取数据库配置
     pg_host = os.getenv("POSTGRES_HOST", "localhost")
     pg_port = os.getenv("POSTGRES_PORT", 5432)
@@ -17,8 +17,16 @@ async def clear_data():
     pg_password = os.getenv("POSTGRES_PASSWORD", "postgres")
     pg_db = os.getenv("POSTGRES_DB", "kgplatform_chidu")
 
+    # 定义 SQL 初始化文件的路径
+    init_sql_path = current_dir / 'init_open_graph.sql'
+
+    if not init_sql_path.exists():
+        print(f"❌ 错误: 找不到初始化文件 {init_sql_path}")
+        return
+
     print(f"正在连接数据库: {pg_host}:{pg_port}/{pg_db} ...")
 
+    conn = None
     try:
         # 建立连接
         conn = await asyncpg.connect(
@@ -29,34 +37,38 @@ async def clear_data():
             database=pg_db
         )
 
-        print("连接成功！准备清空数据...")
+        print("连接成功！")
+        print(f"正在读取 SQL 文件: {init_sql_path.name} ...")
 
-        # 定义要清空的表（注意顺序，使用了 CASCADE 会自动处理依赖，但显式列出更清晰）
-        # RESTART IDENTITY 会将 ID 计数器重置为 1
-        sql = """
-        TRUNCATE TABLE 
-            open_graph_provenance,
-            open_graph_edges,
-            open_graph_nodes,
-            open_graph_chunks
-        RESTART IDENTITY CASCADE;
-        """
+        # 2. 读取 SQL 文件内容
+        sql_script = init_sql_path.read_text(encoding='utf-8')
 
-        # 执行
-        await conn.execute(sql)
-        print("✅ 所有业务表数据已清空，ID计数器已重置。")
-        print("   (open_graph_chunks, open_graph_nodes, open_graph_edges, open_graph_provenance)")
+        print("正在执行数据库重置操作（Drop & Create）...")
 
-        await conn.close()
+        # 3. 执行 SQL 脚本
+        # asyncpg.execute 可以执行包含多条语句的脚本
+        await conn.execute(sql_script)
+
+        print("✅ 数据库重置成功！")
+        print("   旧表已删除，并已根据 init_open_graph.sql 重新创建了空表。")
 
     except Exception as e:
         print(f"❌ 操作失败: {e}")
+    finally:
+        if conn:
+            await conn.close()
 
 
 if __name__ == "__main__":
-    # 简单的确认交互
-    confirm = input("⚠️  警告: 此操作将永久删除数据库中的所有图谱数据！\n是否继续？(y/n): ")
-    if confirm.lower() == 'y':
-        asyncio.run(clear_data())
+    # 交互确认
+    print("=" * 50)
+    print("⚠️  高危操作警告 ⚠️")
+    print("此操作将完全 DROP (删除) 现有数据库表，并根据 SQL 文件重新创建空表。")
+    print("所有现有数据将永久丢失！")
+    print("=" * 50)
+
+    confirm = input("是否确认重置数据库？(请输入 'yes' 确认): ")
+    if confirm.strip().lower() == 'yes':
+        asyncio.run(reset_database())
     else:
         print("操作已取消。")
