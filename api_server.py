@@ -486,6 +486,10 @@ class APIServer:
                 task_type = data.get('task_type', 'schema')  # 默认为 schema 模式
                 project_id = data.get('project_id', 0)
 
+                # 无论是 OpenIE 还是 Schema 模式，现在都需要有效的 project_id
+                if project_id <= 0:
+                    raise BadRequest(f"{task_type} 任务必须提供有效的 project_id")
+
                 # 参数验证
                 # 基础必需参数
                 required_fields = ['files', 'provider', 'api_key']
@@ -530,10 +534,12 @@ class APIServer:
                     for file_item in files:
                         if is_new_format:
                             filename = file_item.get('url')
-                            material_id = file_item.get('material_id')
+                            # 【修复】使用 get() or 0 确保为 0 而非 None
+                            material_id = file_item.get('material_id') or 0
                         else:
                             filename = file_item
-                            material_id = None
+                            # 【修复】默认为 0 而非 None
+                            material_id = 0
 
                         # 拼接完整路径
                         file_path = UPLOAD_DIR / filename
@@ -556,22 +562,24 @@ class APIServer:
                         resolved_files.append({
                             'material_id': material_id,
                             'url': str(file_path),
-                            'file_name': filename  # <--- [新增] 显式传递文件名
+                            'file_name': filename
                         })
 
                     if invalid_files:
-                            raise BadRequest(f"无效文件列表：{'; '.join(invalid_files)}")
+                        raise BadRequest(f"无效文件列表：{'; '.join(invalid_files)}")
 
-                        # 处理绝对路径列表
+                # 处理绝对路径列表
                 elif is_path_list:
                     invalid_files = []
                     for file_item in files:
                         if is_new_format:
                             file_path_str = file_item.get('url')
-                            material_id = file_item.get('material_id')
+                            # 【修复】使用 get() or 0
+                            material_id = file_item.get('material_id') or 0
                         else:
                             file_path_str = file_item
-                            material_id = None
+                            # 【修复】默认为 0
+                            material_id = 0
 
                         path_obj = Path(file_path_str)
                         if not path_obj.exists():
@@ -586,7 +594,7 @@ class APIServer:
                         resolved_files.append({
                             'material_id': material_id,
                             'url': file_path_str,
-                            'file_name': path_obj.name  # <--- [新增] 提取路径中的文件名
+                            'file_name': path_obj.name
                         })
 
                     if invalid_files:
@@ -598,10 +606,12 @@ class APIServer:
                     for file_item in files:
                         if is_new_format:
                             url = file_item.get('url')
-                            material_id = file_item.get('material_id')
+                            # 【修复】使用 get() or 0
+                            material_id = file_item.get('material_id') or 0
                         else:
                             url = file_item
-                            material_id = None
+                            # 【修复】默认为 0
+                            material_id = 0
 
                         try:
                             downloaded_file = self._download_file_from_url(url, UPLOAD_DIR)
@@ -629,9 +639,6 @@ class APIServer:
                 # 根据任务类型分发到不同的服务
                 if task_type == 'open_ie':
                     # OpenIE 模式：调用 open_ie_service
-                    if project_id <= 0:
-                        raise BadRequest("OpenIE 模式必须提供有效的 project_id")
-
                     logger.info(f"接收到 OpenIE 任务，项目ID: {project_id}")
                     task_id = self.open_ie_service.create_task(
                         files=resolved_files,
@@ -643,10 +650,12 @@ class APIServer:
                     )
                 else:
                     # Schema 模式 (默认)：调用原有的 service
+                    logger.info(f"接收到 Schema 任务，项目ID: {project_id}")
                     task_id = self.service.create_task(
                         files=resolved_files,
                         prompt_text=data.get('prompt_text', ''),
                         provider=data['provider'],
+                        project_id=project_id,
                         model=data.get('model'),
                         api_key=data['api_key'],
                         base_url=data.get('base_url')

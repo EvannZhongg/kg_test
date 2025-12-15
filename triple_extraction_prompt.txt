@@ -5,20 +5,17 @@
 步骤3：抽取参与实践活动的人物，以及在实践活动中的实践行为
 步骤4：然后针对实践活动结合原文总结实践成果，并且总结实践成果依托的专业技能
 
-=== 重要：输出格式要求 ===
 你必须严格按照以下JSON格式输出，不要添加任何其他文字、说明或格式：
 
 ```json
-{
-  "实践活动": "实践活动名称",
-  "三元组列表": [
-    {
-      "head": {"label": "实体表面词", "type": "实体类型"},
-      "relationship": {"label": "关系表面词", "type": "关系类型"},
-      "tail": {"label": "实体表面词", "type": "实体类型"}
-    }
-  ]
-}
+            prompt_lines.append("{")
+            prompt_lines.append('  "activity": "核心实践活动名称",')
+            prompt_lines.append('  "triples": [')
+            prompt_lines.append(
+                '    // 格式：["头实体(标准名)", "头类型", "关系", "关系类型", "尾实体(标准名)", "尾类型"]')
+            prompt_lines.append('    ["实体A", "类型A", "关系X", "类型X", "实体B", "类型B"]')
+            prompt_lines.append('  ]')
+            prompt_lines.append("}")
 ```
 
 === 输出示例 ===
@@ -151,3 +148,10 @@ https://mp.weixin.qq.com/s/hvwfYUzcyQKvASq_0SygkA
 18      感受气候变化影响      实践成果                 融入                依托          建筑技术      专业技能
 19     手工制作分类垃圾桶      实践成果                 通过                依托          绘画手工      专业技能
 20  绘画自己心目中的绿色建筑      实践成果                 通过                依托          绘画手工      专业技能
+
+
+
+
+
+
+

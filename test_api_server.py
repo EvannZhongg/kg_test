@@ -1,180 +1,262 @@
 import requests
-import json
 import time
+import json
 import os
+import asyncio
+import csv
 from pathlib import Path
+from dotenv import load_dotenv
 
-# ================= 配置区域 =================
+# 尝试导入数据库客户端用于结果验证
+try:
+    from database import db_client
 
-CONFIG = {
-    # API 服务器地址
-    "api_base_url": "http://localhost:8001",
+    DB_AVAILABLE = True
+except ImportError:
+    print("Warning: database.py not found, skipping database verification.")
+    DB_AVAILABLE = False
 
-    # AI 提供商配置
-    "provider": "deepseek",  # 或 "qwen"
-    "api_key": "sk-1bc317ee3858458d9648944a2184e4df",  # 您的 API Key
+# 加载环境变量
+load_dotenv()
 
-    # === 1. Prompt 生成参数 (测试核心) ===
-    # 注意：API server 需要通过 URL 下载这些配置文件
-    # 您可以在本地起一个 python -m http.server 8080 来服务这些文件
-    "gen_prompt_params": {
-        # Schema URL (必须)
-        "schema_url": "http://localhost:8080/knowledge_graph_schema.json",
+# === 配置 ===
+API_BASE_URL = "http://127.0.0.1:8001"
+# 测试文本目录
+TEST_TXT_DIR = Path(r"D:\Personal_Project\kgplatform_backend\python-service\example")
+OUTPUT_DIR = Path("output_api_test_results")
+TEST_PROJECT_ID = 9997
+# Prompt 文件路径
+PROMPT_FILE = Path("triple_extraction_prompt2.txt")
 
-        # 目标领域
-        "target_domain": "建筑学与社会实践",
+# 根据 .env 配置使用 forward provider
+PROVIDER = "forward"
+API_KEY = os.getenv("FORWARD_API_KEY", "")
 
-        # 专业词典 URL (用于测试归一化)
-        "dictionary_url": "http://localhost:8080/dictionary.txt",
-
-        # 抽取优先级 (用于测试思维链 Round)
-        "priority_extractions": [
-            "实践活动",
-            "参与人物",
-            "实践成果"
-        ],
-
-        # 自定义要求
-        "extraction_requirements": "请特别注意区分活动的主办方和承办方。",
-
-        # 样例数据 (可选)
-        # "sample_text_url": "http://localhost:8080/sample.txt",
-        # "sample_xlsx_url": "http://localhost:8080/sample.xlsx"
-    },
-
-    # === 2. 任务测试文件 ===
-    # 本地待抽取的测试文件路径
-    "test_file_path": r"C:\Users\YourName\Documents\test_article.txt"
-}
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+if not TEST_TXT_DIR.exists():
+    TEST_TXT_DIR.mkdir(parents=True, exist_ok=True)
+    # 创建一个包含重复信息的测试文件，用于测试权重累加
+    (TEST_TXT_DIR / "test_degree_weight.txt").write_text(
+        "马云创立了阿里巴巴。马云创立了阿里巴巴。马云出生于杭州。",
+        encoding="utf-8"
+    )
 
 
-# ================= 功能函数 =================
+def create_extraction_task(files):
+    url = f"{API_BASE_URL}/api/v1/tasks"
 
-def test_generate_prompt():
-    """测试 Prompt 生成接口"""
-    url = f"{CONFIG['api_base_url']}/api/v1/genprompt"
-    print(f"\n[1] 正在请求生成 Prompt: {url}")
-    print(f"    参数: {json.dumps(CONFIG['gen_prompt_params'], ensure_ascii=False, indent=2)}")
+    # 读取 Prompt 文件
+    if PROMPT_FILE.exists():
+        print(f"正在使用本地 Prompt 文件: {PROMPT_FILE.absolute()}")
+        prompt_content = PROMPT_FILE.read_text(encoding="utf-8")
+    else:
+        print("警告: 本地 Prompt 文件不存在，使用默认硬编码 Prompt")
+        prompt_content = """
+        你是一个信息抽取助手。请从文本中抽取实体和关系。
+        请严格按照以下JSON格式输出：
+        ```json
+        {
+          "triples": [
+            ["头实体", "头类型", "关系", "关系类型", "尾实体", "尾类型"]
+          ]
+        }
+        ```
+        """
+
+    files_payload = []
+    for i, file_path in enumerate(files, 1):
+        files_payload.append({
+            "url": str(file_path.absolute()),
+            "material_id": 1000 + i
+        })
+
+    payload = {
+        "task_type": "schema",
+        "project_id": TEST_PROJECT_ID,
+        "files": files_payload,
+        "provider": PROVIDER,
+        "api_key": API_KEY,
+        "model": "",
+        "prompt_text": prompt_content  # <--- 使用读取到的 Prompt 内容
+    }
 
     try:
-        response = requests.post(url, json=CONFIG['gen_prompt_params'])
-        response.raise_for_status()
-        result = response.json()
-
-        print("\n✅ Prompt 生成成功!")
-        print("-" * 40)
-        # 打印生成的 Prompt 前 500 字符和关键部分，供检查
-        prompt_content = result['prompt']
-        print(f"Prompt 长度: {len(prompt_content)} 字符")
-
-        # 检查关键特征是否包含在 Prompt 中
-        checks = {
-            "数组格式要求": "使用紧凑的数组格式",
-            "思维链 Round": "Round 1",
-            "归一化规则": "指代消解",
-            "目标领域": CONFIG['gen_prompt_params']['target_domain']
-        }
-
-        print("\n关键特征检查:")
-        for feature, keyword in checks.items():
-            status = "✔ 存在" if keyword in prompt_content else "❌ 未找到"
-            print(f"  - {feature}: {status}")
-
-        print("-" * 40)
-        return prompt_content
-
-    except requests.exceptions.RequestException as e:
-        print(f"\n❌ Prompt 生成失败: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"    错误详情: {e.response.text}")
+        print(f"正在发送请求到 {url} ...")
+        resp = requests.post(url, json=payload)
+        resp.raise_for_status()
+        return resp.json().get("task_id")
+    except Exception as e:
+        print(f"请求失败: {e}")
         return None
 
 
-def test_create_and_monitor_task(prompt_text):
-    """测试任务创建与执行"""
-    # 1. 构造任务请求
-    url = f"{CONFIG['api_base_url']}/api/v1/tasks"
-    file_path = CONFIG['test_file_path']
+def monitor_task(task_id):
+    url = f"{API_BASE_URL}/api/v1/tasks/{task_id}"
+    print(f"开始监控任务 {task_id} ...")
 
-    if not os.path.exists(file_path):
-        print(f"\n❌ 测试文件不存在: {file_path}")
-        # 创建一个临时文件用于测试
-        print("    正在创建临时测试文件...")
-        with open("temp_test.txt", "w", encoding="utf-8") as f:
-            f.write("2023年，东南大学建筑学院的张三教授带领团队在南京进行了乡村振兴实践。")
-        file_path = os.path.abspath("temp_test.txt")
+    while True:
+        try:
+            resp = requests.get(url)
+            resp.raise_for_status()
+            status_data = resp.json()
+            status = status_data.get("status")
 
-    payload = {
-        "files": [file_path],  # 支持绝对路径
-        "prompt_text": prompt_text,  # 使用刚才生成的 Prompt
-        "provider": CONFIG['provider'],
-        "api_key": CONFIG['api_key']
-    }
+            print(f"Status: {status} | 进度: {status_data.get('processed_files')}/{status_data.get('total_files')}")
 
-    print(f"\n[2] 正在创建抽取任务...")
+            if status in ["completed", "failed", "cancelled"]:
+                if status == "failed":
+                    print("错误列表:", json.dumps(status_data.get("errors", []), ensure_ascii=False, indent=2))
+                return status_data
 
-    try:
-        # 创建任务
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        task_data = response.json()
-        task_id = task_data['task_id']
-        print(f"✅ 任务创建成功! ID: {task_id}")
+        except Exception as e:
+            print(f"获取状态失败: {e}")
 
-        # 监控进度
-        print("\n[3] 开始监控任务进度...")
-        while True:
-            status_url = f"{CONFIG['api_base_url']}/api/v1/tasks/{task_id}"
-            resp = requests.get(status_url)
-            status = resp.json()
+        time.sleep(2)
 
-            state = status['status']
-            processed = status.get('processed_files', 0)
-            total = status.get('total_files', 0)
 
-            print(f"    >> 状态: {state} | 进度: {processed}/{total}")
+async def verify_database_data():
+    """【修改重点】增强的数据库验证逻辑"""
+    if not DB_AVAILABLE:
+        return
 
-            if state in ['completed', 'failed', 'cancelled']:
-                break
+    print("\n=== 正在验证数据库数据 (新特性检查) ===")
+    pool = await db_client.get_pool()
+    async with pool.acquire() as conn:
+        # 1. 验证 Chunks 及文件名记录
+        print("\n[1. 检查 Chunks 表]")
+        chunks = await conn.fetch(
+            "SELECT id, file_name, substring(text_content, 1, 20) as preview FROM limited_graph_chunks WHERE project_id = $1",
+            TEST_PROJECT_ID
+        )
+        print(f"  -> 找到 {len(chunks)} 个 Chunk")
+        for c in chunks:
+            print(f"     File: {c['file_name']} | Preview: {c['preview']}...")
 
-            time.sleep(2)
+        # 2. 验证 Nodes (重点检查 Degree 和 Weight)
+        print("\n[2. 检查 Nodes 表 (验证 Degree & Weight)]")
+        nodes = await conn.fetch(
+            """
+            SELECT label, entity_type, weight, degree 
+            FROM limited_graph_nodes 
+            WHERE project_id = $1 
+            ORDER BY degree DESC, weight DESC 
+            LIMIT 10
+            """,
+            TEST_PROJECT_ID
+        )
 
-        # 结果展示
-        print(f"\n[4] 任务结束. 最终状态: {state}")
-        if state == 'completed':
-            results = status.get('results', [])
-            for res in results:
-                print(f"\n    📄 文件: {res['file_name']}")
-                print(f"    📊 三元组数量: {res['triples_count']}")
+        print(f"  -> Top 10 Nodes:")
+        print(f"     {'Label':<15} | {'Type':<10} | {'Weight':<6} | {'Degree':<6}")
+        print(f"     {'-' * 15}-+-{'-' * 10}-+-{'-' * 6}-+-{'-' * 6}")
+        for n in nodes:
+            print(f"     {n['label']:<15} | {n['entity_type']:<10} | {n['weight']:<6} | {n['degree']:<6}")
 
-                # 读取并展示输出文件内容（前几行）
-                out_file = res['output_files']['jsonl']
-                if os.path.exists(out_file):
-                    print(f"    💾 输出路径: {out_file}")
-                    print("    📝 抽取结果预览 (Array Format):")
-                    with open(out_file, 'r', encoding='utf-8') as f:
-                        content = json.load(f)
-                        # 打印前 2 个三元组
-                        print(json.dumps(content[:2], indent=2, ensure_ascii=False))
-                else:
-                    print(f"    ❌ 输出文件未找到: {out_file}")
+        # 验证逻辑：如果输入文本有重复句子，Weight 应该 > 1
+        has_weight_gt_1 = any(n['weight'] > 1 for n in nodes)
+        # 验证逻辑：如果有关系连接，Degree 应该 > 0
+        has_degree_gt_0 = any(n['degree'] > 0 for n in nodes)
+
+        if has_weight_gt_1:
+            print("  [√] 验证通过: 检测到权重累加 (Weight > 1)，去重逻辑生效。")
         else:
-            print(f"❌ 任务失败原因: {status.get('errors', '未知错误')}")
+            print("  [?] 警告: 未检测到权重累加，可能是文本无重复或抽取不稳定。")
 
-    except Exception as e:
-        print(f"\n❌ 任务执行出错: {e}")
+        if has_degree_gt_0:
+            print("  [√] 验证通过: 检测到节点度数 (Degree > 0)，图计算逻辑生效。")
+        else:
+            print("  [x] 失败: 所有节点 Degree 均为 0，请检查 increment_limited_nodes_degree 调用。")
+
+        # 3. 验证 Edges
+        print("\n[3. 检查 Edges 表]")
+        edges = await conn.fetch(
+            """
+            SELECT s.label as src, e.relation, t.label as tgt, e.weight
+            FROM limited_graph_edges e
+            JOIN limited_graph_nodes s ON e.source_id = s.id
+            JOIN limited_graph_nodes t ON e.target_id = t.id
+            WHERE e.project_id = $1 
+            ORDER BY e.weight DESC
+            LIMIT 5
+            """,
+            TEST_PROJECT_ID
+        )
+        for e in edges:
+            print(f"     {e['src']} --[{e['relation']}]--> {e['tgt']} (Weight: {e['weight']})")
+
+        # 4. 导出 CSV (包含自定义 SQL)
+        print("\n[4. 导出 CSV]")
+
+        # 导出 Nodes (默认全字段，除去 embedding)
+        await export_to_csv(conn, "limited_graph_nodes", "nodes_v2.csv")
+
+        # 导出 Edges (使用自定义 SQL，替换 ID 为 Label)
+        edges_sql_with_names = """
+            SELECT 
+                e.id, 
+                e.edge_id, 
+                e.project_id,
+                s.label AS source,      -- 替换 source_id 为 source_label
+                t.label AS target,      -- 替换 target_id 为 target_label
+                e.relation, 
+                e.relation_type, 
+                e.weight, 
+                e.source_chunk_ids,
+                e.created_at
+            FROM limited_graph_edges e
+            JOIN limited_graph_nodes s ON e.source_id = s.id
+            JOIN limited_graph_nodes t ON e.target_id = t.id
+            WHERE e.project_id = $1
+            ORDER BY e.weight DESC
+        """
+        await export_to_csv(conn, "limited_graph_edges", "edges_v2.csv", custom_sql=edges_sql_with_names)
+
+    await db_client.close_current_pool()
+
+
+async def export_to_csv(conn, table_name, filename, custom_sql=None):
+    filepath = OUTPUT_DIR / filename
+
+    # 如果提供了自定义 SQL，则使用它；否则使用默认的全表查询
+    if custom_sql:
+        rows = await conn.fetch(custom_sql, TEST_PROJECT_ID)
+    else:
+        rows = await conn.fetch(f"SELECT * FROM {table_name} WHERE project_id = $1", TEST_PROJECT_ID)
+
+    if rows:
+        # 1. 获取所有列名
+        all_keys = list(rows[0].keys())
+
+        # 2. 过滤掉 'embedding' 列
+        keys = [k for k in all_keys if k != 'embedding']
+
+        with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            # 写入表头
+            writer.writerow(keys)
+
+            for row in rows:
+                # 3. 只写入不在排除列表中的列
+                writer.writerow([str(row[k]) for k in keys])
+
+        print(f"  -> 已导出 {table_name} 到 {filepath} (已剔除 embedding)")
+    else:
+        print(f"  -> 表 {table_name} (或查询结果) 为空，跳过导出")
+
+
+def main():
+    files = list(TEST_TXT_DIR.glob("*.txt"))
+    if not files:
+        print("没有找到测试文件")
+        return
+
+    task_id = create_extraction_task(files)
+    if not task_id: return
+
+    result = monitor_task(task_id)
+
+    if result and result.get("status") == "completed" and DB_AVAILABLE:
+        asyncio.run(verify_database_data())
 
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("       API Server 全流程测试脚本")
-    print("=" * 50)
-
-    # 步骤 1: 生成 Prompt
-    generated_prompt = test_generate_prompt()
-
-    # 步骤 2: 如果 Prompt 生成成功，则使用它去跑任务
-    if generated_prompt:
-        test_create_and_monitor_task(generated_prompt)
-    else:
-        print("\n⚠️ 由于 Prompt 生成失败，跳过任务执行测试。")
+    main()

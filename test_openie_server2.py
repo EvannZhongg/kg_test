@@ -26,7 +26,7 @@ CONFIG = {
     "model": os.getenv("FORWARD_DEFAULT_MODEL"),
 
     # OpenIE 必需参数
-    "project_id": 65,
+    "project_id": 66,
     "start_material_id": 2001,  # 修改：作为起始素材ID，后续文件自动累加
 }
 

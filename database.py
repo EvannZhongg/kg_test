@@ -227,4 +227,90 @@ class DatabaseClient:
         async with pool.acquire() as conn:
             await conn.execute(sql, project_id, task_id, chunk_id, node_internal_id, edge_internal_id)
 
+    # === 限定抽取 (Limited Extraction) 专用方法 ===
+
+    async def upsert_limited_chunk(self, project_id: int, file_id: int, chunk_id: str,
+                                   chunk_index: int, text: str, file_name: str = None,
+                                   embedding: List[float] = None):  # <--- 新增 embedding
+        """插入或更新限定抽取的 Chunk (带向量)"""
+        embedding_str = str(embedding) if embedding else None
+
+        sql = """
+        INSERT INTO limited_graph_chunks (id, project_id, file_id, chunk_index, text_content, file_name, embedding)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (id) DO UPDATE SET
+            text_content = EXCLUDED.text_content,
+            file_name = EXCLUDED.file_name,
+            embedding = EXCLUDED.embedding;
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(sql, chunk_id, project_id, file_id, chunk_index, text, file_name, embedding_str)
+
+    async def upsert_limited_node(self, project_id: int, label: str, entity_type: str,
+                                  source_chunk_id: str, embedding: List[float] = None) -> int:  # <--- 新增 embedding
+        """插入或更新限定抽取的节点 (带向量)"""
+        node_id = self.generate_hash_id(f"limited_{project_id}_{label.strip()}_{entity_type.strip()}")
+        embedding_str = str(embedding) if embedding else None
+
+        sql = """
+        INSERT INTO limited_graph_nodes (project_id, label, node_id, entity_type, source_chunk_ids, weight, degree, embedding)
+        VALUES ($1, $2, $3, $4, ARRAY[$5], 1, 0, $6)
+        ON CONFLICT (node_id) DO UPDATE SET
+            weight = limited_graph_nodes.weight + 1,
+            source_chunk_ids = array_append(limited_graph_nodes.source_chunk_ids, $5),
+            embedding = EXCLUDED.embedding, -- 更新向量
+            updated_at = CURRENT_TIMESTAMP
+        RETURNING id;
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval(sql, project_id, label, node_id, entity_type, source_chunk_id, embedding_str)
+
+    async def upsert_limited_edge(self, project_id: int, src_internal_id: int, tgt_internal_id: int,
+                                  relation: str, relation_type: str, source_chunk_id: str,
+                                  embedding: List[float] = None) -> tuple[int, bool]:  # <--- 新增 embedding
+        """插入或更新限定抽取的边 (带向量)"""
+        raw = f"limited_{project_id}_{src_internal_id}_{tgt_internal_id}_{relation}_{relation_type}"
+        edge_id = self.generate_hash_id(raw)
+        embedding_str = str(embedding) if embedding else None
+
+        sql = """
+        INSERT INTO limited_graph_edges (project_id, source_id, target_id, relation, relation_type, edge_id, weight, source_chunk_ids, embedding)
+        VALUES ($1, $2, $3, $4, $5, $6, 1, ARRAY[$7], $8)
+        ON CONFLICT (edge_id) DO UPDATE SET
+            weight = limited_graph_edges.weight + 1,
+            source_chunk_ids = array_append(limited_graph_edges.source_chunk_ids, $7),
+            embedding = EXCLUDED.embedding
+        RETURNING id, (xmax = 0) AS is_insert;
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(sql, project_id, src_internal_id, tgt_internal_id, relation, relation_type,
+                                      edge_id, source_chunk_id, embedding_str)
+            return row['id'], row['is_insert']
+
+    async def increment_limited_nodes_degree(self, node_ids: List[int]):
+        """【新增】批量增加限定抽取节点的度 (Degree + 1)"""
+        if not node_ids:
+            return
+        sql = """
+        UPDATE limited_graph_nodes 
+        SET degree = degree + 1 
+        WHERE id = ANY($1::bigint[])
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(sql, node_ids)
+
+    async def insert_limited_provenance(self, project_id: int, task_id: str, chunk_id: str,
+                                        node_id: Optional[int] = None, edge_id: Optional[int] = None):
+        sql = """
+        INSERT INTO limited_graph_provenance (project_id, task_id, chunk_id, node_id, edge_id)
+        VALUES ($1, $2, $3, $4, $5)
+        """
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(sql, project_id, task_id, chunk_id, node_id, edge_id)
+
 db_client = DatabaseClient()

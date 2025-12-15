@@ -31,7 +31,7 @@ You are an expert Open Information Extraction (OpenIE) Specialist. Your task is 
 3.  **General Rules:**
     * **Entity Consistency**: Every entity appearing as a `source_entity` or `target_entity` in the relationships MUST be explicitly extracted and described in the 'Entity Extraction' list. Do not output a relationship if either the source or target entity is missing from the entity list.
     * **Completeness:** Extract as much information as possible.
-    * **Language:** Output in {language}. Proper nouns should be retained in their original language.
+    * **Language:** **STRICTLY FOLLOW SOURCE LANGUAGE**: The output language must be strictly aligned with the source text language. Do not translate. If the input is Chinese, output Chinese. If the input is English, output English. Proper nouns should be retained in their original language.
     * **Tone:** All output must be in the third person, avoiding pronouns like 'I', 'you', 'this article'.
     * **Delimiter:** Use `{tuple_delimiter}` strictly as the field separator.
     * **End:** Output `{completion_delimiter}` on the final line when finished.
