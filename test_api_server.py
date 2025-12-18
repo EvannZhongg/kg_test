@@ -187,7 +187,7 @@ async def verify_database_data():
         print("\n[4. 导出 CSV]")
 
         # 导出 Nodes (默认全字段，除去 embedding)
-        await export_to_csv(conn, "limited_graph_nodes", "nodes_v2.csv")
+        await export_to_csv(conn, "limited_graph_nodes", "nodes_schema.csv")
 
         # 导出 Edges (使用自定义 SQL，替换 ID 为 Label)
         edges_sql_with_names = """
@@ -208,7 +208,7 @@ async def verify_database_data():
             WHERE e.project_id = $1
             ORDER BY e.weight DESC
         """
-        await export_to_csv(conn, "limited_graph_edges", "edges_v2.csv", custom_sql=edges_sql_with_names)
+        await export_to_csv(conn, "limited_graph_edges", "edges_schema.csv", custom_sql=edges_sql_with_names)
 
     await db_client.close_current_pool()
 
